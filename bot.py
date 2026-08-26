@@ -14,46 +14,15 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from telegram.request import HTTPXRequest
 
-# Abaikan warning deprecation
+# Abaikan warning jika ada
 warnings.filterwarnings("ignore")
-
-import google.generativeai as genai
 
 # Load environment variables dari file .env
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://telegram-ai-bot-mmpg.onrender.com")
 TEMPLATES_FILE = "templates.json"
-
-# SYSTEM INSTRUCTION: Memaksa AI selalu ramah dan SELALU sertakan emoji/emote di setiap jawaban
-SYSTEM_PROMPT = (
-    "Kamu adalah Asisten AI yang sangat ramah, sopan, profesional, dan ceria. "
-    "ATURAN WAJIB: Di setiap jawaban atau balasan yang kamu berikan, kamu HARUS SELALU menyertakan "
-    "emoji / emote (seperti 😊, 🙏, 🤖, ✨, 🏨, 👍, dll.) yang sesuai dengan konteks percakapan!"
-)
-
-# Konfigurasi Gemini AI
-if GEMINI_KEY:
-    genai.configure(api_key=GEMINI_KEY)
-
-MODEL_NAMES = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-3.6-flash', 'gemini-2.5-pro']
-
-def get_ai_response(user_text):
-    """Mencoba memanggil Gemini AI dengan fallback model jika terkena 429 Rate Limit"""
-    last_error = None
-    for model_name in MODEL_NAMES:
-        try:
-            m = genai.GenerativeModel(model_name, system_instruction=SYSTEM_PROMPT)
-            res = m.generate_content(user_text)
-            if res and res.text:
-                return res.text
-        except Exception as e:
-            last_error = e
-            time.sleep(0.5)
-            continue
-    raise last_error
 
 # --- MANAJEMEN TEMPLATE KATEGORI LOKAL ---
 def load_templates():
@@ -63,15 +32,7 @@ def load_templates():
                 return json.load(f)
         except Exception:
             return {}
-    return {
-        "tungguvalidasi": (
-            "Baik kak 🙏\nMohon ditunggu sebentar ya kak. Saat ini kami sedang membantu mengubah "
-            "data rekening pada ID kakak dari yang sebelumnya tidak valid menjadi rekening yang valid "
-            "agar akun dapat digunakan kembali dengan normal.\n"
-            "Proses sedang kami lakukan, mohon kesediaannya untuk menunggu sebentar ya kak. "
-            "Terima kasih atas kesabaran kakak 😊"
-        )
-    }
+    return {}
 
 def save_templates(data):
     try:
@@ -94,7 +55,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
-        self.wfile.write(b"OK - Bot Telegram AI is Active 24/7")
+        self.wfile.write(b"OK - Bot Telegram Template Handler Active 24/7")
 
     def log_message(self, format, *args):
         return
@@ -125,11 +86,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name
     msg = (
         f"Halo {user_name}! 👋😊\n"
-        f"Saya adalah Bot Asisten AI Kolaboratif. Siapa saja di grup ini bisa membuat, mengubah, atau memakai templat kategori! 🤖✨\n\n"
+        f"Selamat datang di Bot Templat Kategori. Siapa saja di grup ini bisa membuat, merubah, atau memakai templat balasan! 🤖✨\n\n"
         f"📌 *Perintah Utama*:\n"
-        f"• `/menu` - Tampilkan tombol menu kategori\n"
-        f"• `/set [nama_kategori] [pesan_jawaban]` - Tambah/Ubah kategori (Bisa dilakukan siapa saja!)\n"
-        f"• `/list` - Lihat semua daftar kategori tersimpan\n"
+        f"• `/menu` - Tampilkan tombol menu pilihan kategori\n"
+        f"• `/set [nama_kategori] [pesan_jawaban]` - Simpan/Edit kategori\n"
+        f"• `/list` - Lihat daftar semua kategori tersimpan\n"
         f"• `/del [nama_kategori]` - Hapus kategori\n"
     )
     await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode="Markdown")
@@ -139,33 +100,33 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not templates:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="Belum ada kategori yang dibuat 😊 Ketik `/set [nama] [pesan]` untuk menambahkan kategori baru!"
+            text="Belum ada kategori yang dibuat 😊 Ketik `/set [nama] [pesan]` untuk menambahkan kategori baru!",
+            parse_mode="Markdown"
         )
         return
 
     keyboard = []
-    # Buat tombol 2 kolom
     items = list(templates.keys())
     for i in range(0, len(items), 2):
-        row = [InlineKeyboardButton(f"📁 {items[i]}", callback_data=f"tmpl_{items[i]}")]
+        row = [InlineKeyboardButton(f"📁 /{items[i]}", callback_data=f"tmpl_{items[i]}")]
         if i + 1 < len(items):
-            row.append(InlineKeyboardButton(f"📁 {items[i+1]}", callback_data=f"tmpl_{items[i+1]}"))
+            row.append(InlineKeyboardButton(f"📁 /{items[i+1]}", callback_data=f"tmpl_{items[i+1]}"))
         keyboard.append(row)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
-        text=" Silakan pilih Kategori di bawah ini (atau ketik langsung `/[nama_kategori]`):",
+        text="Silakan pilih Kategori di bawah ini (atau ketik langsung `/[nama_kategori]`):",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
 
 async def set_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menambah atau merubah teks kategori oleh SIAPA SAJA"""
+    """Menambah atau merubah teks kategori"""
     if not context.args or len(context.args) < 2:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="⚠️ Cara Penggunaan:\n`/set [nama_kategori] [isi pesan]`\n\nContoh:\n`/set tungguvalidasi Baik kak, mohon tunggu data rekening sedang divalidasi 🙏`",
+            text="⚠️ Cara Penggunaan:\n`/set [nama_kategori] [isi pesan]`\n\nContoh:\n`/set bukaakun Baik kak 🙏 Mohon ditunggu data sedang diperbaiki 😊`",
             parse_mode="Markdown"
         )
         return
@@ -190,10 +151,10 @@ async def list_templates_command(update: Update, context: ContextTypes.DEFAULT_T
         await context.bot.send_message(chat_id=update.effective_chat.id, text="Belum ada kategori tersimpan 😊")
         return
 
-    text = "📋 *Daftar Kategori Tersimpan* (Bisa digunakan oleh siapa saja):\n\n"
+    text = "📋 *Daftar Kategori Tersimpan*:\n\n"
     for k in templates.keys():
         text += f"• `/{k}`\n"
-    text += "\n💡 Ketik `/menu` untuk melihat tombol interaktif atau ketik `/set` untuk merubah."
+    text += "\n💡 Ketik `/menu` untuk melihat tombol pilihan."
     await context.bot.send_message(chat_id=update.effective_chat.id, text=text, parse_mode="Markdown")
 
 async def del_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -224,7 +185,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.message.reply_text("❌ Kategori tidak ditemukan.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Memproses pesan umum atau panggilan command kategori tanpa slash"""
+    """Memproses panggilan command kategori (Gemini AI sudah DINOAKTIFKAN)"""
     if not update.message or not update.message.text:
         return
 
@@ -237,7 +198,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if bot_username and f"@{bot_username}" in cleaned_text:
         cleaned_text = cleaned_text.replace(f"@{bot_username}", "").strip()
 
-    # Cek apakah pesan diawali slash command khusus kategori (seperti /tungguvalidasi)
+    # Cek apakah pesan cocok dengan salah satu kategori (misal: /bukaakun atau bukaakun)
     possible_cmd = cleaned_text.replace("/", "").strip().lower()
     if possible_cmd in templates:
         await context.bot.send_message(
@@ -247,46 +208,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if not GEMINI_KEY:
-        await context.bot.send_message(chat_id=chat_id, text="Gemini API Key belum diisi! ⚠️")
-        return
-
-    # Tampilkan efek 'sedang mengetik' di Telegram
-    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
-
-    try:
-        reply_text = get_ai_response(cleaned_text)
-        await context.bot.send_message(
-            chat_id=chat_id, 
-            text=reply_text,
-            reply_to_message_id=update.message.message_id if chat_type in ['group', 'supergroup'] else None
-        )
-    except Exception as e:
-        err_str = str(e)
-        logging.error(f"Error AI: {err_str}")
-        
-        if "429" in err_str or "quota" in err_str.lower():
-            friendly_msg = (
-                "Maaf ya kak 🙏 AI sedang melayani banyak pertanyaan dalam waktu singkat (Batas Kuota Sementara) 😅\n\n"
-                "Mohon tunggu sekitar 10-15 detik lalu coba kirimkan lagi pertanyaannya ya kak! Terima kasih atas kesabarannya 😊✨"
-            )
-        else:
-            friendly_msg = "Maaf kak, sedang ada sedikit kendala koneksi dengan AI. Mohon coba sebentar lagi ya kak! 🙏😊"
-
-        await context.bot.send_message(
-            chat_id=chat_id, 
-            text=friendly_msg,
-            reply_to_message_id=update.message.message_id if chat_type in ['group', 'supergroup'] else None
-        )
+    # Catatan: Pemanggilan Gemini AI sudah dinonaktifkan sepenuhnya.
+    # Jika pesan umum dikirim dan bukan bagian dari kategori, bot tidak akan merespons (atau hening).
 
 if __name__ == '__main__':
     if not TELEGRAM_TOKEN:
         print("Error: TELEGRAM_BOT_TOKEN tidak ditemukan pada file .env!")
         exit(1)
         
-    print("Bot Telegram AI sedang berjalan...")
+    print("Bot Telegram Template Handler sedang berjalan...")
     
-    # Jalankan server web kecil untuk Render Health Check & Self Ping
     server_thread = threading.Thread(target=run_health_server, daemon=True)
     server_thread.start()
     start_self_ping()
@@ -294,20 +225,15 @@ if __name__ == '__main__':
     request_config = HTTPXRequest(connect_timeout=30.0, read_timeout=30.0)
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).request(request_config).build()
     
-    # Registered Commands
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('menu', menu_command))
     app.add_handler(CommandHandler('set', set_template_command))
     app.add_handler(CommandHandler('list', list_templates_command))
     app.add_handler(CommandHandler('del', del_template_command))
     
-    # Callback query handler untuk tombol inline
     app.add_handler(CallbackQueryHandler(handle_callback_query))
     
-    # Handler pesan umum
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    
-    # Handler fallback untuk command dinamis
     app.add_handler(MessageHandler(filters.COMMAND, handle_message))
     
     app.run_polling()
