@@ -25,13 +25,26 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://telegram-ai-bot-mmpg.onrender.com")
 
+# SYSTEM INSTRUCTION: Memaksa AI selalu ramah dan SELALU sertakan emoji/emote di setiap jawaban
+SYSTEM_PROMPT = (
+    "Kamu adalah Asisten AI yang sangat ramah, sopan, profesional, dan ceria. "
+    "ATURAN WAJIB: Di setiap jawaban atau balasan yang kamu berikan, kamu HARUS SELALU menyertakan "
+    "emoji / emote (seperti 😊, 🙏, 🤖, ✨, 🏨, 👍, dll.) yang sesuai dengan konteks percakapan!"
+)
+
 # Konfigurasi Gemini AI menggunakan model gemini-3.6-flash
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
     try:
-        model = genai.GenerativeModel('gemini-3.6-flash')
+        model = genai.GenerativeModel(
+            'gemini-3.6-flash',
+            system_instruction=SYSTEM_PROMPT
+        )
     except Exception:
-        model = genai.GenerativeModel('gemini-flash-latest')
+        model = genai.GenerativeModel(
+            'gemini-flash-latest',
+            system_instruction=SYSTEM_PROMPT
+        )
 else:
     model = None
 
@@ -50,7 +63,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"OK - Bot Telegram AI is Active 24/7")
 
     def log_message(self, format, *args):
-        return  # Heningkan log HTTP biasa agar konsol tetap bersih
+        return
 
 def run_health_server():
     port = int(os.environ.get("PORT", 8080))
@@ -60,7 +73,7 @@ def run_health_server():
 def start_self_ping():
     """Thread di latar belakang yang otomatis nge-ping URL setiap 60 detik agar tidak pernah sleep"""
     def ping_loop():
-        time.sleep(10)  # Tunggu server siap
+        time.sleep(10)
         while True:
             try:
                 req = urllib.request.Request(RENDER_URL, headers={'User-Agent': 'KeepAliveBot/1.0'})
@@ -68,7 +81,7 @@ def start_self_ping():
                     logging.info("⚡ Self-Ping Berhasil: Bot terjaga 100% aktif (1 menit sekali)")
             except Exception as e:
                 logging.info(f"⚡ Ping status check: {e}")
-            time.sleep(60)  # Ping setiap 60 detik (1 menit)
+            time.sleep(60)
 
     t = threading.Thread(target=ping_loop, daemon=True)
     t.start()
@@ -77,7 +90,7 @@ def start_self_ping():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fungsi merespons perintah /start"""
     user_name = update.effective_user.first_name
-    greeting = f"Halo {user_name}!\nSaya adalah Bot Asisten AI berbasis Google Gemini. Ada yang bisa saya bantu?"
+    greeting = f"Halo {user_name}! 👋😊\nSaya adalah Bot Asisten AI (Hotel AI). Ada yang bisa saya bantu hari ini? 🤖✨"
     await context.bot.send_message(chat_id=update.effective_chat.id, text=greeting)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -97,7 +110,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not model:
         await context.bot.send_message(
             chat_id=chat_id, 
-            text="Gemini API Key belum diisi dengan benar pada file .env!"
+            text="Gemini API Key belum diisi dengan benar pada file .env! ⚠️"
         )
         return
 
@@ -119,7 +132,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Error AI: {e}")
         await context.bot.send_message(
             chat_id=chat_id, 
-            text=f"Maaf, terjadi kesalahan saat memproses jawaban: {str(e)}"
+            text=f"Maaf, terjadi kesalahan saat memproses jawaban: {str(e)} 😅"
         )
 
 if __name__ == '__main__':
