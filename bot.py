@@ -130,7 +130,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📌 *Perintah Utama*:\n"
         f"• `/menu` - Tampilkan tombol menu pilihan kategori\n"
         f"• `/set [nama_kategori] [pesan]` - Simpan kategori baru\n"
-        f"• `/edit [nama_kategori] [pesan_baru]` - Edit kategori (Hanya berlaku 5 menit setelah dibuat!)\n"
+        f"• `/edit [nama_kategori] [pesan_baru]` - Edit kategori (Berlaku 5 menit pertama)\n"
         f"• `/list` - Lihat daftar semua kategori tersimpan\n"
         f"• `/del [nama_kategori]` - Hapus kategori\n"
     )
@@ -163,38 +163,59 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-async def set_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menambah teks kategori baru (Dengan Proteksi Anti-Duplikasi)"""
-    if not context.args or len(context.args) < 2:
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="⚠️ Cara Penggunaan:\n`/set [nama_kategori] [isi pesan]`\n\nContoh:\n`/set bukaakun Baik kak 🙏 Mohon ditunggu data sedang diperbaiki 😊`",
+async def process_set_or_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, is_edit_mode=False):
+    """Fungsi bersama untuk menangani /set, /edit, maupun pengeditan pesan langsung di Telegram"""
+    msg_obj = update.effective_message
+    if not msg_obj or not msg_obj.text:
+        return
+
+    text = msg_obj.text.strip()
+    parts = text.split(maxsplit=2)
+    if len(parts) < 3:
+        await msg_obj.reply_text(
+            "⚠️ Cara Penggunaan:\n`/set [nama_kategori] [isi pesan]` atau `/edit [nama_kategori] [pesan_baru]`",
             parse_mode="Markdown"
         )
         return
 
-    key = context.args[0].replace("/", "").strip().lower()
-    val = " ".join(context.args[1:])
+    cmd = parts[0].lower()
+    key = parts[1].replace("/", "").strip().lower()
+    val = parts[2].strip()
 
     current = sync_templates()
 
-    # VALIDASI CEK DUPLIKASI NAMA KATEGORI
+    # JIKA KATEGORI SUDAH ADA
     if key in current:
-        msg = (
-            f"⚠️ *Pendaftaran Kategori Gagal! Nama Kategori Sudah Ada!*\n\n"
-            f"Kategori `/{key}` sudah terdaftar sebelumnya. Nama kategori tidak boleh sama (duplikat) 😊\n\n"
-            f"💡 *Solusi*:\n"
-            f"• Gunakan `/edit {key} {val}` jika ingin mengedit (Berlaku 5 menit pertama)\n"
-            f"• Atau hapus dulu kategori lama dengan `/del {key}`"
-        )
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode="Markdown")
+        created_at = created_timestamps.get(key, time.time())
+        elapsed = time.time() - created_at
+
+        # Cek batas waktu 5 menit (300 detik)
+        if elapsed <= 300:
+            current[key] = val
+            save_local_templates(current)
+            threading.Thread(target=write_to_google_sheet, args=(key, val, "set"), daemon=True).start()
+
+            msg = (
+                f"✏️ *Kategori `/{key}` Berhasil Di-Edit!* 🎉\n\n"
+                f"📝 *Isi Pesan Baru*:\n{val}\n\n"
+                f"⏱️ _(Di-edit dalam batas waktu {int(elapsed // 60)}m {int(elapsed % 60)}s)_"
+            )
+            await msg_obj.reply_text(msg, parse_mode="Markdown")
+        else:
+            minutes_passed = int(elapsed // 60)
+            msg = (
+                f"⏳ *Pengeditan Gagal! Batas Waktu Edit Kedaluwarsa!*\n\n"
+                f"Kategori `/{key}` sudah dibuat *{minutes_passed} menit* yang lalu ⏱️\n"
+                f"Pengeditan hanya bisa dilakukan dalam waktu *5 menit* pertama sejak kategori dibuat.\n\n"
+                f"💡 *Solusi*: Silakan hapus kategori ini dengan `/del {key}` jika ingin menggantinya!"
+            )
+            await msg_obj.reply_text(msg, parse_mode="Markdown")
         return
 
+    # JIKA KATEGORI BELUM ADA (MEMBUAT BARU)
     current[key] = val
-    created_timestamps[key] = time.time()  # Simpan waktu pembuatan untuk batasan edit 5 menit
+    created_timestamps[key] = time.time()
     save_local_templates(current)
-    
-    # Menuliskan secara otomatis ke Google Sheets
     threading.Thread(target=write_to_google_sheet, args=(key, val, "set"), daemon=True).start()
 
     msg = (
@@ -202,57 +223,15 @@ async def set_template_command(update: Update, context: ContextTypes.DEFAULT_TYP
         f"📌 *Nama Kategori*: `{key}`\n"
         f"💬 *Panggil Dengan*: `/{key}` atau via `/menu`\n\n"
         f"📝 *Isi Pesan*:\n{val}\n\n"
-        f"⏱️ _Catatan: Kategori ini dapat di-edit menggunakan `/edit {key} [pesan_baru]` dalam waktu 5 menit ke depan._"
+        f"⏱️ _Catatan: Kategori ini dapat di-edit menggunakan `/edit {key} [pesan_baru]` atau langsung edit pesan Telegram ini dalam waktu 5 menit ke depan._"
     )
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode="Markdown")
+    await msg_obj.reply_text(msg, parse_mode="Markdown")
+
+async def set_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await process_set_or_edit(update, context, is_edit_mode=False)
 
 async def edit_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mengedit teks kategori (HANYA BISA DALAM WAKTU 5 MENIT SEJAK DIBUAT)"""
-    if not context.args or len(context.args) < 2:
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="⚠️ Cara Penggunaan:\n`/edit [nama_kategori] [pesan_baru]`",
-            parse_mode="Markdown"
-        )
-        return
-
-    key = context.args[0].replace("/", "").strip().lower()
-    val = " ".join(context.args[1:])
-
-    current = sync_templates()
-    if key not in current:
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"❌ Kategori `/{key}` belum terdaftar. Ketik `/set {key} {val}` untuk membuatnya!",
-            parse_mode="Markdown"
-        )
-        return
-
-    # CEK BATAS WAKTU EDIT 5 MENIT (300 Detik)
-    created_at = created_timestamps.get(key, time.time())
-    elapsed = time.time() - created_at
-    
-    if elapsed > 300: # Lebih dari 300 detik (5 menit)
-        minutes_passed = int(elapsed // 60)
-        msg = (
-            f"⏳ *Batas Waktu Edit Kedaluwarsa!*\n\n"
-            f"Pengeditan kategori `/{key}` hanya diperbolehkan dalam waktu *5 menit* setelah kategori dibuat.\n"
-            f"Kategori ini sudah dibuat *{minutes_passed} menit* yang lalu ⏱️\n\n"
-            f"💡 *Solusi*: Silakan hapus kategori ini terlebih dahulu dengan `/del {key}` lalu daftarkan kembali!"
-        )
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode="Markdown")
-        return
-
-    # Update template jika masih dalam 5 menit
-    current[key] = val
-    save_local_templates(current)
-    threading.Thread(target=write_to_google_sheet, args=(key, val, "set"), daemon=True).start()
-
-    msg = (
-        f"✏️ *Kategori `/{key}` Berhasil Di-Edit!* 🎉\n\n"
-        f"📝 *Isi Pesan Baru*:\n{val}"
-    )
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode="Markdown")
+    await process_set_or_edit(update, context, is_edit_mode=True)
 
 async def list_templates_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Melihat daftar semua kategori"""
@@ -301,10 +280,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Memproses panggilan command kategori"""
-    if not update.message or not update.message.text:
+    msg_obj = update.effective_message
+    if not msg_obj or not msg_obj.text:
         return
 
-    raw_text = update.message.text.strip()
+    raw_text = msg_obj.text.strip()
     chat_id = update.effective_chat.id
     chat_type = update.effective_chat.type
 
@@ -319,7 +299,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(
             chat_id=chat_id,
             text=current[possible_cmd],
-            reply_to_message_id=update.message.message_id if chat_type in ['group', 'supergroup'] else None
+            reply_to_message_id=msg_obj.message_id if chat_type in ['group', 'supergroup'] else None
         )
         return
 
@@ -345,6 +325,9 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('del', del_template_command))
     
     app.add_handler(CallbackQueryHandler(handle_callback_query))
+    
+    # Mendukung pengeditan pesan langsung di Telegram (Edited Messages)
+    app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, set_template_command))
     
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app.add_handler(MessageHandler(filters.COMMAND, handle_message))
