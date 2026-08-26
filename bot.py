@@ -129,10 +129,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Selamat datang di Bot Templat Kategori. Siapa saja di grup ini bisa membuat, merubah, atau memakai templat balasan! 🤖✨\n\n"
         f"📌 *Perintah Utama*:\n"
         f"• `/menu` - Tampilkan tombol menu pilihan kategori\n"
-        f"• `/set [nama_kategori] [pesan]` - Simpan/Edit kategori (Bisa di-edit dalam 5 menit pertama)\n"
-        f"• `/edit [nama_kategori] [pesan_baru]` - Edit kategori (Bisa di-edit dalam 5 menit pertama)\n"
+        f"• `/set [nama] [pesan]` - Simpan/Edit 1 kategori\n"
+        f"• `/bulkset` - Simpan BANYAK kategori sekaligus\n"
         f"• `/list` - Lihat daftar semua kategori tersimpan\n"
-        f"• `/del [nama_kategori]` - Hapus kategori\n"
+        f"• `/del [nama]` - Hapus kategori\n"
     )
     await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode="Markdown")
 
@@ -232,6 +232,54 @@ async def set_template_command(update: Update, context: ContextTypes.DEFAULT_TYP
 async def edit_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await process_set_or_edit(update, context)
 
+async def bulkset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Menambah/Merubah BANYAK Kategori Sekaligus dalam 1 Pesan Chat"""
+    msg_obj = update.effective_message
+    if not msg_obj or not msg_obj.text:
+        return
+
+    text = msg_obj.text.strip()
+    lines = text.split("\n")[1:]  # Ambil baris setelah /bulkset
+    if not lines:
+        msg = (
+            "⚠️ *Cara Penggunaan `/bulkset` (Menambah Banyak Kategori)*:\n\n"
+            "Ketik `/bulkset` lalu diikuti baris kategori baru menggunakan sama dengan (`=`):\n\n"
+            "`/bulkset`\n"
+            "`jamlayanan = Jam operasional buka jam 08:00 - 22:00 WIB 😊`\n"
+            "`rek_invalid = Data rekening belum sesuai kak, mohon kirim foto tabungan 🙏`\n"
+            "`lupapw = Kami bantu resetkan kata sandinya ya kak 😊`"
+        )
+        await msg_obj.reply_text(msg, parse_mode="Markdown")
+        return
+
+    current = sync_templates()
+    added_keys = []
+    
+    for line in lines:
+        if "=" in line:
+            parts = line.split("=", 1)
+            key = parts[0].replace("/", "").strip().lower()
+            val = parts[1].strip()
+            if key and val:
+                current[key] = val
+                created_timestamps[key] = time.time()
+                added_keys.append(key)
+                threading.Thread(target=write_to_google_sheet, args=(key, val, "set"), daemon=True).start()
+
+    save_local_templates(current)
+
+    if added_keys:
+        keys_str = "\n".join([f"• `/{k}`" for k in added_keys])
+        msg = (
+            f"✅ *Berhasil Menyimpan {len(added_keys)} Kategori Sekaligus ke Telegram & Google Sheets!* 🎉\n\n"
+            f"{keys_str}\n\n"
+            f"💡 Ketik `/menu` untuk melihat tombol pilihannya!"
+        )
+    else:
+        msg = "⚠️ Tidak ada kategori valid yang ditemukan. Pastikan format menggunakan pemisah tanda sama dengan (`=`)."
+
+    await msg_obj.reply_text(msg, parse_mode="Markdown")
+
 async def list_templates_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Melihat daftar semua kategori"""
     current = sync_templates()
@@ -320,12 +368,12 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('menu', menu_command))
     app.add_handler(CommandHandler('set', set_template_command))
     app.add_handler(CommandHandler('edit', edit_template_command))
+    app.add_handler(CommandHandler('bulkset', bulkset_command))
     app.add_handler(CommandHandler('list', list_templates_command))
     app.add_handler(CommandHandler('del', del_template_command))
     
     app.add_handler(CallbackQueryHandler(handle_callback_query))
     
-    # Mendukung pengeditan pesan langsung di Telegram (Edited Messages)
     app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, process_set_or_edit))
     
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
