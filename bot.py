@@ -84,12 +84,14 @@ def write_to_google_sheet(key, val, action="set"):
         logging.error(f"Gagal menulis ke Google Sheet Webhook: {e}")
 
 def format_category_response(key, val):
-    """Format rapi tampilan balasan kategori lengkap dengan Header & Isi Pesan"""
+    """Format rapi tampilan balasan kategori (Isi Pesan Tap-to-Copy Instan)"""
     return (
         f"📌 *Nama Kategori*: `{key}`\n"
         f"💬 *Panggil Dengan*: `/{key}` atau via `/menu`\n\n"
-        f"📝 *Isi Pesan*:\n"
-        f"{val}"
+        f"📝 *Isi Pesan* _(Tap/Klik teks di bawah untuk Copy)_:\n"
+        f"```\n"
+        f"{val}\n"
+        f"```"
     )
 
 # Konfigurasi Logging
