@@ -1,12 +1,15 @@
 import os
 import sys
 import json
+import csv
+import io
 import logging
 import warnings
 import threading
 import asyncio
 import time
 import urllib.request
+import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from dotenv import load_dotenv
@@ -14,34 +17,70 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from telegram.request import HTTPXRequest
 
-# Abaikan warning jika ada
+# Abaikan warning
 warnings.filterwarnings("ignore")
 
-# Load environment variables dari file .env
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://telegram-ai-bot-mmpg.onrender.com")
 TEMPLATES_FILE = "templates.json"
+GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1Q33PvIAGYj3lNWJQ3YngLvuOcCm8tA1pD7gT0ixmUfI/export?format=csv"
 
-# --- MANAJEMEN TEMPLATE KATEGORI LOKAL ---
-def load_templates():
+# --- DEFAULT TEMPLATES JIKA GOOGLE SHEET MASIH KOSONG ---
+DEFAULT_TEMPLATES = {
+    "bukaakun": (
+        "Baik kak 🙏\nUntuk ID kakak sudah kami bantu betulkan ya kak, termasuk perbaikan pada data "
+        "yang sebelumnya bermasalah. Silakan kakak coba login kembali ke akun kakak.\n"
+        "Apabila sudah berhasil login, kakak dapat mengajukan kembali form penarikan seperti biasa melalui menu penarikan yang tersedia.\n"
+        "Jika masih mengalami kendala saat login atau saat melakukan penarikan, silakan informasikan kembali kepada kami ya kak, dengan senang hati akan kami bantu cek kembali 😊"
+    ),
+    "tungguvalidasi": (
+        "Baik kak 🙏\nMohon ditunggu sebentar ya kak. Saat ini kami sedang membantu mengubah data "
+        "rekening pada ID kakak dari yang sebelumnya tidak valid menjadi rekening yang valid agar akun dapat digunakan kembali dengan normal.\n"
+        "Proses sedang kami lakukan, mohon kesediaannya untuk menunggu sebentar ya kak. Terima kasih atas kesabaran kakak 😊"
+    )
+}
+
+def sync_templates():
+    """Membaca data dari Google Sheets secara langsung"""
+    data = dict(DEFAULT_TEMPLATES)
+    
+    # 1. Coba baca dari file lokal jika ada
     if os.path.exists(TEMPLATES_FILE):
         try:
             with open(TEMPLATES_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                local_data = json.load(f)
+                data.update(local_data)
         except Exception:
-            return {}
-    return {}
+            pass
 
-def save_templates(data):
+    # 2. Coba sinkronisasi dari Google Sheets
+    try:
+        r = requests.get(GOOGLE_SHEET_CSV_URL, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        if r.status_code == 200 and r.text.strip():
+            reader = csv.reader(io.StringIO(r.text))
+            rows = list(reader)
+            for row in rows:
+                if len(row) >= 2:
+                    key = row[0].replace("/", "").strip().lower()
+                    val = row[1].strip()
+                    # Abaikan baris header
+                    if key and key != "kategori" and val:
+                        data[key] = val
+    except Exception as e:
+        logging.warning(f"Gagal sync Google Sheets: {e}")
+        
+    return data
+
+def save_local_templates(data):
     try:
         with open(TEMPLATES_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        logging.error(f"Gagal menyimpan templates: {e}")
+        logging.error(f"Gagal menyimpan local templates: {e}")
 
-templates = load_templates()
+templates = sync_templates()
 
 # Konfigurasi Logging
 logging.basicConfig(
@@ -97,7 +136,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Menampilkan tombol inline keyboard untuk daftar kategori"""
-    if not templates:
+    current_templates = sync_templates()
+    if not current_templates:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="Belum ada kategori yang dibuat 😊 Ketik `/set [nama] [pesan]` untuk menambahkan kategori baru!",
@@ -106,7 +146,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = []
-    items = list(templates.keys())
+    items = list(current_templates.keys())
     for i in range(0, len(items), 2):
         row = [InlineKeyboardButton(f"📁 /{items[i]}", callback_data=f"tmpl_{items[i]}")]
         if i + 1 < len(items):
@@ -134,8 +174,9 @@ async def set_template_command(update: Update, context: ContextTypes.DEFAULT_TYP
     key = context.args[0].replace("/", "").strip().lower()
     val = " ".join(context.args[1:])
 
-    templates[key] = val
-    save_templates(templates)
+    current = sync_templates()
+    current[key] = val
+    save_local_templates(current)
 
     msg = (
         f"✅ *Kategori Berhasil Disimpan / Diperbarui!* 🎉\n\n"
@@ -147,12 +188,13 @@ async def set_template_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def list_templates_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Melihat daftar semua kategori"""
-    if not templates:
+    current = sync_templates()
+    if not current:
         await context.bot.send_message(chat_id=update.effective_chat.id, text="Belum ada kategori tersimpan 😊")
         return
 
     text = "📋 *Daftar Kategori Tersimpan*:\n\n"
-    for k in templates.keys():
+    for k in current.keys():
         text += f"• `/{k}`\n"
     text += "\n💡 Ketik `/menu` untuk melihat tombol pilihan."
     await context.bot.send_message(chat_id=update.effective_chat.id, text=text, parse_mode="Markdown")
@@ -164,9 +206,10 @@ async def del_template_command(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     key = context.args[0].replace("/", "").strip().lower()
-    if key in templates:
-        del templates[key]
-        save_templates(templates)
+    current = sync_templates()
+    if key in current:
+        del current[key]
+        save_local_templates(current)
         await context.bot.send_message(chat_id=update.effective_chat.id, text=f"🗑️ Kategori `/{key}` berhasil dihapus!", parse_mode="Markdown")
     else:
         await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Kategori `/{key}` tidak ditemukan.", parse_mode="Markdown")
@@ -179,13 +222,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     data = query.data
     if data.startswith("tmpl_"):
         key = data.replace("tmpl_", "")
-        if key in templates:
-            await query.message.reply_text(templates[key])
+        current = sync_templates()
+        if key in current:
+            await query.message.reply_text(current[key])
         else:
             await query.message.reply_text("❌ Kategori tidak ditemukan.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Memproses panggilan command kategori (Gemini AI sudah DINOAKTIFKAN)"""
+    """Memproses panggilan command kategori"""
     if not update.message or not update.message.text:
         return
 
@@ -198,18 +242,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if bot_username and f"@{bot_username}" in cleaned_text:
         cleaned_text = cleaned_text.replace(f"@{bot_username}", "").strip()
 
-    # Cek apakah pesan cocok dengan salah satu kategori (misal: /bukaakun atau bukaakun)
+    # Cek apakah pesan cocok dengan salah satu kategori
     possible_cmd = cleaned_text.replace("/", "").strip().lower()
-    if possible_cmd in templates:
+    current = sync_templates()
+    if possible_cmd in current:
         await context.bot.send_message(
             chat_id=chat_id,
-            text=templates[possible_cmd],
+            text=current[possible_cmd],
             reply_to_message_id=update.message.message_id if chat_type in ['group', 'supergroup'] else None
         )
         return
-
-    # Catatan: Pemanggilan Gemini AI sudah dinonaktifkan sepenuhnya.
-    # Jika pesan umum dikirim dan bukan bagian dari kategori, bot tidak akan merespons (atau hening).
 
 if __name__ == '__main__':
     if not TELEGRAM_TOKEN:
