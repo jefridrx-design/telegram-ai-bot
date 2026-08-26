@@ -192,6 +192,18 @@ async def process_set_or_edit(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     current = sync_templates()
 
+    # CEK DUPLIKASI ISI PESAN (CONTENT ANTI-DUPLICATION)
+    for existing_k, existing_v in current.items():
+        if existing_k != key and existing_v.strip().lower() == val.strip().lower():
+            msg = (
+                f"⚠️ *Pendaftaran Kategori Gagal! Isi Pesan Sudah Ada!*\n\n"
+                f"Isi pesan ini sudah terdaftar 100% sama pada kategori `/{existing_k}`.\n"
+                f"Sistem menolak duplikasi isi pesan yang sama 😊\n\n"
+                f"💡 *Solusi*: Gunakan kategori `/{existing_k}` yang sudah ada, atau ubah sedikit isi kalimat pesannya!"
+            )
+            await msg_obj.reply_text(msg, parse_mode="Markdown")
+            return
+
     # JIKA KATEGORI SUDAH ADA SEBELUMNYA (PROSES EDIT)
     if key in current:
         created_at = created_timestamps.get(key, time.time())
@@ -240,7 +252,7 @@ async def edit_template_command(update: Update, context: ContextTypes.DEFAULT_TY
     await process_set_or_edit(update, context)
 
 async def bulkset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menambah/Merubah BANYAK Kategori Sekaligus (Mendukung Multi-Paragraf)"""
+    """Menambah/Merubah BANYAK Kategori Sekaligus (Dengan Proteksi Duplikasi Isi Pesan)"""
     msg_obj = update.effective_message
     if not msg_obj or not msg_obj.text:
         return
@@ -287,21 +299,37 @@ async def bulkset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     current = sync_templates()
     added_keys = []
+    duplicate_content_warnings = []
+
+    # Map isi pesan yang sudah ada untuk pengecekan cepat
+    existing_content_map = {v.strip().lower(): k for k, v in current.items()}
 
     for k, v in parsed_entries.items():
+        v_clean = v.strip().lower()
+        
+        # Cek jika isi pesan sudah ada di kategori lain
+        if v_clean in existing_content_map and existing_content_map[v_clean] != k:
+            duplicate_content_warnings.append(f"• `/{k}` ditolak (Isi pesan sama dengan `/{existing_content_map[v_clean]}`)")
+            continue
+
         current[k] = v
+        existing_content_map[v_clean] = k
         created_timestamps[k] = time.time()
         added_keys.append(k)
         threading.Thread(target=write_to_google_sheet, args=(k, v, "set"), daemon=True).start()
 
     save_local_templates(current)
 
-    keys_str = "\n".join([f"• `/{k}`" for k in added_keys])
-    msg = (
-        f"✅ *Berhasil Menyimpan {len(added_keys)} Kategori (Lengkap dengan Seluruh Paragraf)!* 🎉\n\n"
-        f"{keys_str}\n\n"
-        f"💡 Ketik `/menu` untuk melihat tombol pilihannya!"
-    )
+    msg_lines = []
+    if added_keys:
+        keys_str = "\n".join([f"• `/{k}`" for k in added_keys])
+        msg_lines.append(f"✅ *Berhasil Menyimpan {len(added_keys)} Kategori!* 🎉\n\n{keys_str}")
+    
+    if duplicate_content_warnings:
+        warn_str = "\n".join(duplicate_content_warnings)
+        msg_lines.append(f"⚠️ *Ditolak Kategori Duplikat Isi Pesan*:\n{warn_str}")
+
+    msg = "\n\n".join(msg_lines) if msg_lines else "⚠️ Semua kategori ditolak karena isi pesan duplikat."
     await msg_obj.reply_text(msg, parse_mode="Markdown")
 
 async def list_templates_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
