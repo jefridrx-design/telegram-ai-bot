@@ -121,7 +121,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Selamat datang di Bot Templat Kategori. Siapa saja di grup ini bisa membuat, merubah, atau memakai templat balasan! 🤖✨\n\n"
         f"📌 *Perintah Utama*:\n"
         f"• `/menu` - Tampilkan tombol menu pilihan kategori\n"
-        f"• `/set [nama_kategori] [pesan_jawaban]` - Simpan/Edit kategori (Auto-Sync Google Sheets)\n"
+        f"• `/set [nama_kategori] [pesan_jawaban]` - Simpan kategori baru\n"
         f"• `/list` - Lihat daftar semua kategori tersimpan\n"
         f"• `/del [nama_kategori]` - Hapus kategori\n"
     )
@@ -133,7 +133,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not current_templates:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="Belum ada kategori tersimpan 😊 Ketik `/set [nama] [pesan]` untuk menambahkan kategori baru!",
+            text="Belum ada kategori yang dibuat 😊 Ketik `/set [nama] [pesan]` untuk menambahkan kategori baru!",
             parse_mode="Markdown"
         )
         return
@@ -155,7 +155,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def set_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menambah atau merubah teks kategori"""
+    """Menambah atau merubah teks kategori (Dengan Proteksi Duplikasi)"""
     if not context.args or len(context.args) < 2:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
@@ -168,6 +168,20 @@ async def set_template_command(update: Update, context: ContextTypes.DEFAULT_TYP
     val = " ".join(context.args[1:])
 
     current = sync_templates()
+
+    # VALIDASI CEK DUPLIKASI NAMA KATEGORI
+    if key in current:
+        msg = (
+            f"⚠️ *Pendaftaran Kategori Gagal! Nama Kategori Sudah Ada!*\n\n"
+            f"Kategori `/{key}` sudah terdaftar sebelumnya di dalam sistem/Google Sheets. "
+            f"Nama kategori tidak boleh sama (duplikat) 😊\n\n"
+            f"💡 *Solusi*:\n"
+            f"• Gunakan nama kategori lain (contoh: `/{key}2` atau `/{key}_baru`)\n"
+            f"• Atau hapus dulu kategori lama dengan `/del {key}` jika ingin menggantinya!"
+        )
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode="Markdown")
+        return
+
     current[key] = val
     save_local_templates(current)
     
@@ -175,7 +189,7 @@ async def set_template_command(update: Update, context: ContextTypes.DEFAULT_TYP
     threading.Thread(target=write_to_google_sheet, args=(key, val, "set"), daemon=True).start()
 
     msg = (
-        f"✅ *Kategori Berhasil Disimpan / Diperbarui!* 🎉\n\n"
+        f"✅ *Kategori Baru Berhasil Disimpan!* 🎉\n\n"
         f"📌 *Nama Kategori*: `{key}`\n"
         f"💬 *Panggil Dengan*: `/{key}` atau via `/menu`\n\n"
         f"📝 *Isi Pesan*:\n{val}"
