@@ -26,8 +26,9 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://telegram-ai-bot-mmpg.onrender.com")
 TEMPLATES_FILE = "templates.json"
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1Q33PvIAGYj3lNWJQ3YngLvuOcCm8tA1pD7gT0ixmUfI/export?format=csv"
+GOOGLE_APPS_SCRIPT_URL = os.getenv("GOOGLE_APPS_SCRIPT_URL", "")
 
-# --- DEFAULT TEMPLATES JIKA GOOGLE SHEET MASIH KOSONG ---
+# --- DEFAULT TEMPLATES BAWAAN ---
 DEFAULT_TEMPLATES = {
     "bukaakun": (
         "Baik kak 🙏\nUntuk ID kakak sudah kami bantu betulkan ya kak, termasuk perbaikan pada data "
@@ -46,7 +47,7 @@ def sync_templates():
     """Membaca data dari Google Sheets secara langsung"""
     data = dict(DEFAULT_TEMPLATES)
     
-    # 1. Coba baca dari file lokal jika ada
+    # 1. Baca dari file lokal
     if os.path.exists(TEMPLATES_FILE):
         try:
             with open(TEMPLATES_FILE, "r", encoding="utf-8") as f:
@@ -55,7 +56,7 @@ def sync_templates():
         except Exception:
             pass
 
-    # 2. Coba sinkronisasi dari Google Sheets
+    # 2. Sync otomatis dari Google Sheets
     try:
         r = requests.get(GOOGLE_SHEET_CSV_URL, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
         if r.status_code == 200 and r.text.strip():
@@ -65,7 +66,6 @@ def sync_templates():
                 if len(row) >= 2:
                     key = row[0].replace("/", "").strip().lower()
                     val = row[1].strip()
-                    # Abaikan baris header
                     if key and key != "kategori" and val:
                         data[key] = val
     except Exception as e:
@@ -80,7 +80,15 @@ def save_local_templates(data):
     except Exception as e:
         logging.error(f"Gagal menyimpan local templates: {e}")
 
-templates = sync_templates()
+def write_to_google_sheet(key, val, action="set"):
+    """Mengirimkan data baru langsung ke Google Sheets Apps Script Webhook"""
+    if not GOOGLE_APPS_SCRIPT_URL:
+        return
+    try:
+        payload = {"key": key, "val": val, "action": action}
+        requests.post(GOOGLE_APPS_SCRIPT_URL, json=payload, timeout=5)
+    except Exception as e:
+        logging.error(f"Gagal menulis ke Google Sheet Webhook: {e}")
 
 # Konfigurasi Logging
 logging.basicConfig(
@@ -128,7 +136,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Selamat datang di Bot Templat Kategori. Siapa saja di grup ini bisa membuat, merubah, atau memakai templat balasan! 🤖✨\n\n"
         f"📌 *Perintah Utama*:\n"
         f"• `/menu` - Tampilkan tombol menu pilihan kategori\n"
-        f"• `/set [nama_kategori] [pesan_jawaban]` - Simpan/Edit kategori\n"
+        f"• `/set [nama_kategori] [pesan_jawaban]` - Simpan/Edit kategori (Auto-Sync Google Sheets)\n"
         f"• `/list` - Lihat daftar semua kategori tersimpan\n"
         f"• `/del [nama_kategori]` - Hapus kategori\n"
     )
@@ -177,6 +185,9 @@ async def set_template_command(update: Update, context: ContextTypes.DEFAULT_TYP
     current = sync_templates()
     current[key] = val
     save_local_templates(current)
+    
+    # Menuliskan secara otomatis ke Google Sheets
+    threading.Thread(target=write_to_google_sheet, args=(key, val, "set"), daemon=True).start()
 
     msg = (
         f"✅ *Kategori Berhasil Disimpan / Diperbarui!* 🎉\n\n"
@@ -210,6 +221,7 @@ async def del_template_command(update: Update, context: ContextTypes.DEFAULT_TYP
     if key in current:
         del current[key]
         save_local_templates(current)
+        threading.Thread(target=write_to_google_sheet, args=(key, "", "del"), daemon=True).start()
         await context.bot.send_message(chat_id=update.effective_chat.id, text=f"🗑️ Kategori `/{key}` berhasil dihapus!", parse_mode="Markdown")
     else:
         await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Kategori `/{key}` tidak ditemukan.", parse_mode="Markdown")
