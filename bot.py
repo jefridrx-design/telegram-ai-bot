@@ -2,6 +2,12 @@ import os
 import sys
 import logging
 import warnings
+import threading
+import asyncio
+import time
+import urllib.request
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
@@ -17,6 +23,7 @@ load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://telegram-ai-bot-mmpg.onrender.com")
 
 # Konfigurasi Gemini AI menggunakan model gemini-3.6-flash
 if GEMINI_KEY:
@@ -34,6 +41,39 @@ logging.basicConfig(
     level=logging.INFO
 )
 
+# --- WEB SERVER KECIL UNTUK HEALTH CHECK & ANTI-SLEEP RENDER ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"OK - Bot Telegram AI is Active 24/7")
+
+    def log_message(self, format, *args):
+        return  # Heningkan log HTTP biasa agar konsol tetap bersih
+
+def run_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    server.serve_forever()
+
+def start_self_ping():
+    """Thread di latar belakang yang otomatis nge-ping URL setiap 60 detik agar tidak pernah sleep"""
+    def ping_loop():
+        time.sleep(10)  # Tunggu server siap
+        while True:
+            try:
+                req = urllib.request.Request(RENDER_URL, headers={'User-Agent': 'KeepAliveBot/1.0'})
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    logging.info("⚡ Self-Ping Berhasil: Bot terjaga 100% aktif (1 menit sekali)")
+            except Exception as e:
+                logging.info(f"⚡ Ping status check: {e}")
+            time.sleep(60)  # Ping setiap 60 detik (1 menit)
+
+    t = threading.Thread(target=ping_loop, daemon=True)
+    t.start()
+
+# --- HANDLER TELEGRAM BOT ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fungsi merespons perintah /start"""
     user_name = update.effective_user.first_name
@@ -89,6 +129,11 @@ if __name__ == '__main__':
         
     print("Bot Telegram AI sedang berjalan...")
     
+    # Jalankan server web kecil untuk Render Health Check & Self Ping
+    server_thread = threading.Thread(target=run_health_server, daemon=True)
+    server_thread.start()
+    start_self_ping()
+
     # Tambahkan timeout 30 detik agar koneksi ke Telegram API lebih stabil
     request_config = HTTPXRequest(connect_timeout=30.0, read_timeout=30.0)
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).request(request_config).build()
