@@ -28,8 +28,11 @@ TEMPLATES_FILE = "templates.json"
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1Q33PvIAGYj3lNWJQ3YngLvuOcCm8tA1pD7gT0ixmUfI/export?format=csv"
 GOOGLE_APPS_SCRIPT_URL = os.getenv("GOOGLE_APPS_SCRIPT_URL", "")
 
+# Menyimpan timestamp waktu pembuatan kategori (untuk batasan edit 5 menit)
+created_timestamps = {}
+
 def sync_templates():
-    """Membaca data dari Google Sheets dan local file tanpa paksaan default"""
+    """Membaca data dari Google Sheets dan local file"""
     data = {}
     
     # 1. Baca dari Google Sheets secara live
@@ -44,6 +47,8 @@ def sync_templates():
                     val = row[1].strip()
                     if key and key != "kategori" and val:
                         data[key] = val
+                        if key not in created_timestamps:
+                            created_timestamps[key] = time.time()
             return data
     except Exception as e:
         logging.warning(f"Gagal sync Google Sheets: {e}")
@@ -53,6 +58,9 @@ def sync_templates():
         try:
             with open(TEMPLATES_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                for k in data.keys():
+                    if k not in created_timestamps:
+                        created_timestamps[k] = time.time()
         except Exception:
             pass
 
@@ -121,14 +129,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Selamat datang di Bot Templat Kategori. Siapa saja di grup ini bisa membuat, merubah, atau memakai templat balasan! 🤖✨\n\n"
         f"📌 *Perintah Utama*:\n"
         f"• `/menu` - Tampilkan tombol menu pilihan kategori\n"
-        f"• `/set [nama_kategori] [pesan_jawaban]` - Simpan kategori baru\n"
+        f"• `/set [nama_kategori] [pesan]` - Simpan kategori baru\n"
+        f"• `/edit [nama_kategori] [pesan_baru]` - Edit kategori (Hanya berlaku 5 menit setelah dibuat!)\n"
         f"• `/list` - Lihat daftar semua kategori tersimpan\n"
         f"• `/del [nama_kategori]` - Hapus kategori\n"
     )
     await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode="Markdown")
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menampilkan tombol inline keyboard untuk daftar kategori murni dari Google Sheets"""
+    """Menampilkan tombol inline keyboard untuk daftar kategori"""
     current_templates = sync_templates()
     if not current_templates:
         await context.bot.send_message(
@@ -155,7 +164,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def set_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menambah atau merubah teks kategori (Dengan Proteksi Duplikasi)"""
+    """Menambah teks kategori baru (Dengan Proteksi Anti-Duplikasi)"""
     if not context.args or len(context.args) < 2:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
@@ -173,16 +182,16 @@ async def set_template_command(update: Update, context: ContextTypes.DEFAULT_TYP
     if key in current:
         msg = (
             f"⚠️ *Pendaftaran Kategori Gagal! Nama Kategori Sudah Ada!*\n\n"
-            f"Kategori `/{key}` sudah terdaftar sebelumnya di dalam sistem/Google Sheets. "
-            f"Nama kategori tidak boleh sama (duplikat) 😊\n\n"
+            f"Kategori `/{key}` sudah terdaftar sebelumnya. Nama kategori tidak boleh sama (duplikat) 😊\n\n"
             f"💡 *Solusi*:\n"
-            f"• Gunakan nama kategori lain (contoh: `/{key}2` atau `/{key}_baru`)\n"
-            f"• Atau hapus dulu kategori lama dengan `/del {key}` jika ingin menggantinya!"
+            f"• Gunakan `/edit {key} {val}` jika ingin mengedit (Berlaku 5 menit pertama)\n"
+            f"• Atau hapus dulu kategori lama dengan `/del {key}`"
         )
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode="Markdown")
         return
 
     current[key] = val
+    created_timestamps[key] = time.time()  # Simpan waktu pembuatan untuk batasan edit 5 menit
     save_local_templates(current)
     
     # Menuliskan secara otomatis ke Google Sheets
@@ -192,7 +201,56 @@ async def set_template_command(update: Update, context: ContextTypes.DEFAULT_TYP
         f"✅ *Kategori Baru Berhasil Disimpan!* 🎉\n\n"
         f"📌 *Nama Kategori*: `{key}`\n"
         f"💬 *Panggil Dengan*: `/{key}` atau via `/menu`\n\n"
-        f"📝 *Isi Pesan*:\n{val}"
+        f"📝 *Isi Pesan*:\n{val}\n\n"
+        f"⏱️ _Catatan: Kategori ini dapat di-edit menggunakan `/edit {key} [pesan_baru]` dalam waktu 5 menit ke depan._"
+    )
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode="Markdown")
+
+async def edit_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mengedit teks kategori (HANYA BISA DALAM WAKTU 5 MENIT SEJAK DIBUAT)"""
+    if not context.args or len(context.args) < 2:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="⚠️ Cara Penggunaan:\n`/edit [nama_kategori] [pesan_baru]`",
+            parse_mode="Markdown"
+        )
+        return
+
+    key = context.args[0].replace("/", "").strip().lower()
+    val = " ".join(context.args[1:])
+
+    current = sync_templates()
+    if key not in current:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"❌ Kategori `/{key}` belum terdaftar. Ketik `/set {key} {val}` untuk membuatnya!",
+            parse_mode="Markdown"
+        )
+        return
+
+    # CEK BATAS WAKTU EDIT 5 MENIT (300 Detik)
+    created_at = created_timestamps.get(key, time.time())
+    elapsed = time.time() - created_at
+    
+    if elapsed > 300: # Lebih dari 300 detik (5 menit)
+        minutes_passed = int(elapsed // 60)
+        msg = (
+            f"⏳ *Batas Waktu Edit Kedaluwarsa!*\n\n"
+            f"Pengeditan kategori `/{key}` hanya diperbolehkan dalam waktu *5 menit* setelah kategori dibuat.\n"
+            f"Kategori ini sudah dibuat *{minutes_passed} menit* yang lalu ⏱️\n\n"
+            f"💡 *Solusi*: Silakan hapus kategori ini terlebih dahulu dengan `/del {key}` lalu daftarkan kembali!"
+        )
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode="Markdown")
+        return
+
+    # Update template jika masih dalam 5 menit
+    current[key] = val
+    save_local_templates(current)
+    threading.Thread(target=write_to_google_sheet, args=(key, val, "set"), daemon=True).start()
+
+    msg = (
+        f"✏️ *Kategori `/{key}` Berhasil Di-Edit!* 🎉\n\n"
+        f"📝 *Isi Pesan Baru*:\n{val}"
     )
     await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode="Markdown")
 
@@ -219,6 +277,8 @@ async def del_template_command(update: Update, context: ContextTypes.DEFAULT_TYP
     current = sync_templates()
     if key in current:
         del current[key]
+        if key in created_timestamps:
+            del created_timestamps[key]
         save_local_templates(current)
         threading.Thread(target=write_to_google_sheet, args=(key, "", "del"), daemon=True).start()
         await context.bot.send_message(chat_id=update.effective_chat.id, text=f"🗑️ Kategori `/{key}` berhasil dihapus!", parse_mode="Markdown")
@@ -280,6 +340,7 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('menu', menu_command))
     app.add_handler(CommandHandler('set', set_template_command))
+    app.add_handler(CommandHandler('edit', edit_template_command))
     app.add_handler(CommandHandler('list', list_templates_command))
     app.add_handler(CommandHandler('del', del_template_command))
     
