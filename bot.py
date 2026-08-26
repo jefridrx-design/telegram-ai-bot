@@ -83,6 +83,15 @@ def write_to_google_sheet(key, val, action="set"):
     except Exception as e:
         logging.error(f"Gagal menulis ke Google Sheet Webhook: {e}")
 
+def format_category_response(key, val):
+    """Format rapi tampilan balasan kategori lengkap dengan Header & Isi Pesan"""
+    return (
+        f"📌 *Nama Kategori*: `{key}`\n"
+        f"💬 *Panggil Dengan*: `/{key}` atau via `/menu`\n\n"
+        f"📝 *Isi Pesan*:\n"
+        f"{val}"
+    )
+
 # Konfigurasi Logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -130,7 +139,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📌 *Perintah Utama*:\n"
         f"• `/menu` - Tampilkan tombol menu pilihan kategori\n"
         f"• `/set [nama] [pesan]` - Simpan/Edit 1 kategori\n"
-        f"• `/bulkset` - Simpan BANYAK kategori sekaligus (Mendukung Multi-Paragraf)\n"
+        f"• `/bulkset` - Simpan BANYAK kategori sekaligus\n"
         f"• `/list` - Lihat daftar semua kategori tersimpan\n"
         f"• `/del [nama]` - Hapus kategori\n"
     )
@@ -196,7 +205,7 @@ async def process_set_or_edit(update: Update, context: ContextTypes.DEFAULT_TYPE
 
             msg = (
                 f"✏️ *Kategori `/{key}` Berhasil Di-Edit / Diperbarui!* 🎉\n\n"
-                f"📝 *Isi Pesan Baru*:\n{val}\n\n"
+                f"{format_category_response(key, val)}\n\n"
                 f"⏱️ _(Di-edit dalam waktu {int(elapsed // 60)}m {int(elapsed % 60)}s sejak dibuat)_"
             )
             await msg_obj.reply_text(msg, parse_mode="Markdown")
@@ -219,9 +228,7 @@ async def process_set_or_edit(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     msg = (
         f"✅ *Kategori Baru Berhasil Disimpan!* 🎉\n\n"
-        f"📌 *Nama Kategori*: `{key}`\n"
-        f"💬 *Panggil Dengan*: `/{key}` atau via `/menu`\n\n"
-        f"📝 *Isi Pesan*:\n{val}\n\n"
+        f"{format_category_response(key, val)}\n\n"
         f"⏱️ _Catatan: Kategori ini bisa bebas di-edit/diganti isinya dalam waktu 5 menit ke depan._"
     )
     await msg_obj.reply_text(msg, parse_mode="Markdown")
@@ -257,10 +264,8 @@ async def bulkset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parsed_entries = {}
 
     for line in content_lines:
-        # Cek jika baris merupakan awal dari key baru (memiliki '=')
         if "=" in line:
             possible_key = line.split("=", 1)[0].replace("/", "").strip().lower()
-            # Kategori harus merupakan 1 kata tanpa spasi di kunci
             if possible_key and " " not in possible_key:
                 if current_key and current_val_lines:
                     parsed_entries[current_key] = "\n".join(current_val_lines).strip()
@@ -331,7 +336,7 @@ async def del_template_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Kategori `/{key}` tidak ditemukan.", parse_mode="Markdown")
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Merespons ketika pengguna mengklik tombol kategori"""
+    """Merespons ketika pengguna mengklik tombol kategori di /menu"""
     query = update.callback_query
     await query.answer()
 
@@ -340,7 +345,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         key = data.replace("tmpl_", "")
         current = sync_templates()
         if key in current:
-            await query.message.reply_text(current[key])
+            response_text = format_category_response(key, current[key])
+            await query.message.reply_text(response_text, parse_mode="Markdown")
         else:
             await query.message.reply_text("❌ Kategori tidak ditemukan.")
 
@@ -362,9 +368,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     possible_cmd = cleaned_text.replace("/", "").strip().lower()
     current = sync_templates()
     if possible_cmd in current:
+        response_text = format_category_response(possible_cmd, current[possible_cmd])
         await context.bot.send_message(
             chat_id=chat_id,
-            text=current[possible_cmd],
+            text=response_text,
+            parse_mode="Markdown",
             reply_to_message_id=msg_obj.message_id if chat_type in ['group', 'supergroup'] else None
         )
         return
