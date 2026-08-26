@@ -28,35 +28,11 @@ TEMPLATES_FILE = "templates.json"
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1Q33PvIAGYj3lNWJQ3YngLvuOcCm8tA1pD7gT0ixmUfI/export?format=csv"
 GOOGLE_APPS_SCRIPT_URL = os.getenv("GOOGLE_APPS_SCRIPT_URL", "")
 
-# --- DEFAULT TEMPLATES BAWAAN ---
-DEFAULT_TEMPLATES = {
-    "bukaakun": (
-        "Baik kak 🙏\nUntuk ID kakak sudah kami bantu betulkan ya kak, termasuk perbaikan pada data "
-        "yang sebelumnya bermasalah. Silakan kakak coba login kembali ke akun kakak.\n"
-        "Apabila sudah berhasil login, kakak dapat mengajukan kembali form penarikan seperti biasa melalui menu penarikan yang tersedia.\n"
-        "Jika masih mengalami kendala saat login atau saat melakukan penarikan, silakan informasikan kembali kepada kami ya kak, dengan senang hati akan kami bantu cek kembali 😊"
-    ),
-    "tungguvalidasi": (
-        "Baik kak 🙏\nMohon ditunggu sebentar ya kak. Saat ini kami sedang membantu mengubah data "
-        "rekening pada ID kakak dari yang sebelumnya tidak valid menjadi rekening yang valid agar akun dapat digunakan kembali dengan normal.\n"
-        "Proses sedang kami lakukan, mohon kesediaannya untuk menunggu sebentar ya kak. Terima kasih atas kesabaran kakak 😊"
-    )
-}
-
 def sync_templates():
-    """Membaca data dari Google Sheets secara langsung"""
-    data = dict(DEFAULT_TEMPLATES)
+    """Membaca data dari Google Sheets dan local file tanpa paksaan default"""
+    data = {}
     
-    # 1. Baca dari file lokal
-    if os.path.exists(TEMPLATES_FILE):
-        try:
-            with open(TEMPLATES_FILE, "r", encoding="utf-8") as f:
-                local_data = json.load(f)
-                data.update(local_data)
-        except Exception:
-            pass
-
-    # 2. Sync otomatis dari Google Sheets
+    # 1. Baca dari Google Sheets secara live
     try:
         r = requests.get(GOOGLE_SHEET_CSV_URL, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
         if r.status_code == 200 and r.text.strip():
@@ -68,9 +44,18 @@ def sync_templates():
                     val = row[1].strip()
                     if key and key != "kategori" and val:
                         data[key] = val
+            return data
     except Exception as e:
         logging.warning(f"Gagal sync Google Sheets: {e}")
-        
+
+    # 2. Fallback baca dari file lokal jika offline
+    if os.path.exists(TEMPLATES_FILE):
+        try:
+            with open(TEMPLATES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            pass
+
     return data
 
 def save_local_templates(data):
@@ -81,7 +66,7 @@ def save_local_templates(data):
         logging.error(f"Gagal menyimpan local templates: {e}")
 
 def write_to_google_sheet(key, val, action="set"):
-    """Mengirimkan data baru langsung ke Google Sheets Apps Script Webhook"""
+    """Mengirimkan data baru/hapus ke Google Sheets Apps Script Webhook"""
     if not GOOGLE_APPS_SCRIPT_URL:
         return
     try:
@@ -143,12 +128,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode="Markdown")
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Menampilkan tombol inline keyboard untuk daftar kategori"""
+    """Menampilkan tombol inline keyboard untuk daftar kategori murni dari Google Sheets"""
     current_templates = sync_templates()
     if not current_templates:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="Belum ada kategori yang dibuat 😊 Ketik `/set [nama] [pesan]` untuk menambahkan kategori baru!",
+            text="Belum ada kategori tersimpan 😊 Ketik `/set [nama] [pesan]` untuk menambahkan kategori baru!",
             parse_mode="Markdown"
         )
         return
@@ -254,7 +239,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if bot_username and f"@{bot_username}" in cleaned_text:
         cleaned_text = cleaned_text.replace(f"@{bot_username}", "").strip()
 
-    # Cek apakah pesan cocok dengan salah satu kategori
     possible_cmd = cleaned_text.replace("/", "").strip().lower()
     current = sync_templates()
     if possible_cmd in current:
