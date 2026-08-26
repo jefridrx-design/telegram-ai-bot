@@ -32,21 +32,28 @@ SYSTEM_PROMPT = (
     "emoji / emote (seperti 😊, 🙏, 🤖, ✨, 🏨, 👍, dll.) yang sesuai dengan konteks percakapan!"
 )
 
-# Konfigurasi Gemini AI menggunakan model gemini-3.6-flash
+# Konfigurasi Gemini AI
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    try:
-        model = genai.GenerativeModel(
-            'gemini-3.6-flash',
-            system_instruction=SYSTEM_PROMPT
-        )
-    except Exception:
-        model = genai.GenerativeModel(
-            'gemini-flash-latest',
-            system_instruction=SYSTEM_PROMPT
-        )
-else:
-    model = None
+
+# List model yang akan dicoba secara berurutan jika salah satu terkena batas limit (Rate Limit)
+MODEL_NAMES = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-3.6-flash', 'gemini-2.5-pro']
+
+def get_ai_response(user_text):
+    """Mencoba memanggil Gemini AI dengan fallback model jika terkena 429 Rate Limit"""
+    last_error = None
+    for model_name in MODEL_NAMES:
+        try:
+            m = genai.GenerativeModel(model_name, system_instruction=SYSTEM_PROMPT)
+            res = m.generate_content(user_text)
+            if res and res.text:
+                return res.text
+        except Exception as e:
+            last_error = e
+            logging.warning(f"Gagal memanggil model {model_name}: {e}. Mencoba model cadangan...")
+            time.sleep(1)
+            continue
+    raise last_error
 
 # Konfigurasi Logging
 logging.basicConfig(
@@ -107,7 +114,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if bot_username and f"@{bot_username}" in user_text:
         user_text = user_text.replace(f"@{bot_username}", "").strip()
 
-    if not model:
+    if not GEMINI_KEY:
         await context.bot.send_message(
             chat_id=chat_id, 
             text="Gemini API Key belum diisi dengan benar pada file .env! ⚠️"
@@ -118,9 +125,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
     try:
-        # Memanggil Gemini AI untuk merespons pesan pengguna
-        response = model.generate_content(user_text)
-        reply_text = response.text
+        # Memanggil Gemini AI dengan sistem fallback otomatis
+        reply_text = get_ai_response(user_text)
         
         # Kirim balasan AI ke chat Telegram (langsung me-reply pesan di grup)
         await context.bot.send_message(
@@ -129,10 +135,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_to_message_id=update.message.message_id if chat_type in ['group', 'supergroup'] else None
         )
     except Exception as e:
-        logging.error(f"Error AI: {e}")
+        err_str = str(e)
+        logging.error(f"Error AI: {err_str}")
+        
+        # Jika terkena Rate Limit 429, berikan pesan yang sopan dan ramah (bukan error teknis)
+        if "429" in err_str or "quota" in err_str.lower():
+            friendly_msg = (
+                "Maaf ya kak 🙏 AI sedang melayani banyak pertanyaan dalam waktu singkat (Batas Kuota Sementara) 😅\n\n"
+                "Mohon tunggu sekitar 10-15 detik lalu coba kirimkan lagi pertanyaannya ya kak! Terima kasih atas kesabarannya 😊✨"
+            )
+        else:
+            friendly_msg = "Maaf kak, sedang ada sedikit kendala koneksi dengan AI. Mohon coba sebentar lagi ya kak! 🙏😊"
+
         await context.bot.send_message(
             chat_id=chat_id, 
-            text=f"Maaf, terjadi kesalahan saat memproses jawaban: {str(e)} 😅"
+            text=friendly_msg,
+            reply_to_message_id=update.message.message_id if chat_type in ['group', 'supergroup'] else None
         )
 
 if __name__ == '__main__':
